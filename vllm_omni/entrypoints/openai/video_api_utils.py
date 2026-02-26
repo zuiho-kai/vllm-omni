@@ -85,6 +85,25 @@ def _normalize_video_array(video_array: np.ndarray) -> list[np.ndarray] | np.nda
 
 def _normalize_frames(frames: list[Any]) -> list[np.ndarray]:
     """Normalize a list of frames into numpy arrays with values in [0,1]."""
+    if not frames:
+        return []
+
+    first = frames[0]
+
+    # Fast path: all torch.Tensor — batch process in one go
+    if isinstance(first, torch.Tensor) and all(isinstance(f, torch.Tensor) for f in frames):
+        stacked = torch.stack(frames).detach().cpu()
+        if stacked.dim() == 4 and stacked.shape[1] in (3, 4) and stacked.shape[-1] not in (3, 4):
+            stacked = stacked.permute(0, 2, 3, 1)
+        arr = stacked.numpy()
+        if np.issubdtype(arr.dtype, np.floating):
+            if arr.min() < 0.0 or arr.max() > 1.0:
+                arr = np.clip(arr, -1.0, 1.0) * 0.5 + 0.5
+        elif np.issubdtype(arr.dtype, np.integer):
+            arr = arr.astype(np.float32) / 255.0
+        return list(arr)
+
+    # Fallback: mixed types, per-frame processing
     normalized: list[np.ndarray] = []
     for frame in frames:
         if isinstance(frame, torch.Tensor):
