@@ -67,6 +67,26 @@ _OMNI_PIPELINES: dict[str, tuple[str, str]] = {
         "vllm_omni.model_executor.models.fish_speech.pipeline",
         "FISH_SPEECH_PIPELINE",
     ),
+    "hunyuan_image_3_moe": (
+        "vllm_omni.model_executor.models.hunyuan_image3.pipeline",
+        "HUNYUAN_IMAGE3_DIT_ONLY_PIPELINE",
+    ),
+    "hunyuan_image_3_moe_ar_dit": (
+        "vllm_omni.model_executor.models.hunyuan_image3.pipeline",
+        "HUNYUAN_IMAGE3_T2I_PIPELINE",
+    ),
+    "hunyuan_image_3_moe_it2i": (
+        "vllm_omni.model_executor.models.hunyuan_image3.pipeline",
+        "HUNYUAN_IMAGE3_IT2I_PIPELINE",
+    ),
+    "hunyuan_image_3_moe_i2t": (
+        "vllm_omni.model_executor.models.hunyuan_image3.pipeline",
+        "HUNYUAN_IMAGE3_I2T_PIPELINE",
+    ),
+    "hunyuan_image_3_moe_t2t": (
+        "vllm_omni.model_executor.models.hunyuan_image3.pipeline",
+        "HUNYUAN_IMAGE3_T2T_PIPELINE",
+    ),
 }
 
 # --- Single-stage diffusion pipelines (populated in PR 3/N) ---
