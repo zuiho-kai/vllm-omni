@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping
+from dataclasses import fields, is_dataclass
+from functools import cache
 from typing import Any
 
 from vllm.logger import init_logger
@@ -25,6 +27,29 @@ from vllm.model_executor.layers.quantization.base_config import (
 from .component_config import ComponentQuantizationConfig
 
 logger = init_logger(__name__)
+
+
+@cache
+def _accepted_config_kwargs(config_cls: type[Any]) -> frozenset[str] | None:
+    if is_dataclass(config_cls):
+        return frozenset(field.name for field in fields(config_cls))
+
+    signature = inspect.signature(config_cls.__init__)
+    params = signature.parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return None
+    return frozenset(
+        name
+        for name, param in params.items()
+        if name != "self" and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    )
+
+
+def _filter_config_kwargs(config_cls: type[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    accepted = _accepted_config_kwargs(config_cls)
+    if accepted is None:
+        return dict(kwargs)
+    return {k: v for k, v in kwargs.items() if k in accepted}
 
 
 def _build_gguf(**kw: Any) -> QuantizationConfig:
@@ -49,9 +74,7 @@ def _build_inc(**kw: Any) -> QuantizationConfig:
     if "bits" in kw and "weight_bits" not in kw:
         kw["weight_bits"] = kw.pop("bits")
 
-    # Filter to only valid INCConfig params
-    valid = set(inspect.signature(OmniINCConfig.__init__).parameters) - {"self"}
-    filtered = {k: v for k, v in kw.items() if k in valid}
+    filtered = _filter_config_kwargs(OmniINCConfig, kw)
     return OmniINCConfig(**filtered)
 
 
@@ -84,9 +107,7 @@ def _build_single(method: str, **kwargs: Any) -> QuantizationConfig:
     if "bits" in kwargs and "weight_bits" not in kwargs:
         kwargs["weight_bits"] = kwargs.pop("bits")
 
-    # Filter to only params the config class accepts
-    valid = set(inspect.signature(config_cls.__init__).parameters) - {"self"}
-    filtered = {k: v for k, v in kwargs.items() if k in valid}
+    filtered = _filter_config_kwargs(config_cls, kwargs)
 
     try:
         return config_cls(**filtered)

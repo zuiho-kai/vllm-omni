@@ -46,6 +46,9 @@ class TokenizerWrapper:
     def __init__(self, tokenizer):
         if isinstance(tokenizer, str):
             try:
+                # HunyuanImage-3.0 advertises custom tokenizer metadata; trust
+                # remote code for the normal HF loader, then fall back to the
+                # raw tokenizer.json path for broken container cache refs.
                 self.tokenizer = AutoTokenizer.from_pretrained(tokenizer, trust_remote_code=True)
             except (ValueError, KeyError, OSError):
                 import json
