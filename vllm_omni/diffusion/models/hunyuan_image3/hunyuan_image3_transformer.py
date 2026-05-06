@@ -75,6 +75,12 @@ from vllm_omni.diffusion.distributed.sp_plan import (
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import HunyuanFusedMoE
+# BUG-FIX-MOE-FP32-ROUTING: pull HF-aligned FP32 routing helpers from model_executor side
+try:
+    from vllm.model_executor.layers.fused_moe.shared_fused_moe import SharedFusedMoE
+except ImportError:
+    from vllm.model_executor.layers.fused_moe import FusedMoE as SharedFusedMoE
+from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3 import _hunyuan_image3_unpack_packed_topk
 
 logger = logging.getLogger(__name__)
 
@@ -1483,11 +1489,14 @@ class HunYuanSparseMoeBlock(nn.Module):
         self.n_logical_experts = self.n_routed_experts
         self.n_redundant_experts = 0
 
+        self.top_k = top_k  # BUG-FIX-MOE-FP32-ROUTING: needed in forward
+        # BUG-FIX-MOE-FP32-ROUTING: HF reference uses FP32 gate (modeling_hunyuan_image_3.py)
         self.gate = ReplicatedLinear(
             config.hidden_size,
             config.num_experts,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
+            params_dtype=torch.float32,
             prefix=f"{prefix}.gate",
         )
         if config.use_mixed_mlp_moe > 0:
@@ -1511,35 +1520,46 @@ class HunYuanSparseMoeBlock(nn.Module):
         else:
             self.shared_mlp = None
 
-        self.experts = HunyuanFusedMoE(
-            gate=self.gate,
+        # BUG-FIX-MOE-FP32-ROUTING: external FP32 routing -> packed (weights, indices)
+        # -> SharedFusedMoE with custom_routing_function bypasses bf16 topk_softmax CUDA op.
+        self.experts = SharedFusedMoE(
             shared_experts=self.shared_mlp,
             num_experts=self.n_routed_experts,
             top_k=top_k,
             hidden_size=config.hidden_size,
             intermediate_size=intermediate_size,
-            renormalize=top_k > 1,
+            renormalize=False,
             quant_config=quant_config,
             prefix=f"{prefix}.experts",
             enable_eplb=self.enable_eplb,
             num_redundant_experts=self.n_redundant_experts,
+            custom_routing_function=_hunyuan_image3_unpack_packed_topk,
             pcp_size=1,
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        # BUG-FIX-MOE-FP32-ROUTING: HF-aligned FP32 routing pipeline.
         # NOTE: hidden_states can have either 1D or 2D shape.
         orig_shape = hidden_states.shape
         hidden_dim = hidden_states.shape[-1]
         hidden_states = hidden_states.view(-1, hidden_dim)
 
-        # vllm 0.20+ FusedMoE owns the gate (passed via __init__) and the
-        # shared-experts merge + TP all-reduce internally. Pass `hidden_states`
-        # as both inputs and `router_logits` so FusedMoE's stored gate runs
-        # routing in-place; the returned tensor is the already-combined
-        # (routed + shared) output, no tuple unpacking needed.
+        # FP32 routing: cast input to fp32, run fp32 gate, fp32 softmax + topk,
+        # fp32 clamp(min=1e-8)+renormalize, then cast topk_weights back to model dtype.
+        router_logits, _ = self.gate(hidden_states.float())
+        gates = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
+        topk_weights, topk_indices = torch.topk(gates, self.top_k, dim=-1)
+        weight_sums = topk_weights.sum(dim=-1, keepdim=True)
+        topk_weights = topk_weights / weight_sums.clamp(min=1e-8)
+        topk_weights = topk_weights.to(hidden_states.dtype)
+
+        # Pack (weights, indices) into router_logits slot for SharedFusedMoE
+        # custom_routing_function unpack -> bypasses bf16 topk_softmax CUDA op.
+        packed_routing = torch.cat([topk_weights.float(), topk_indices.to(torch.float32)], dim=-1)
+
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
-            router_logits=hidden_states,
+            router_logits=packed_routing,
         )
 
         return final_hidden_states.view(orig_shape)
