@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-# ruff: noqa: E402
 """Smoke test for HunyuanImage-3.0 Text-to-Image (T2I) pipeline."""
 
-import sys
 from collections.abc import Generator
 from pathlib import Path
 
@@ -12,14 +10,16 @@ import torch
 from PIL import Image
 
 from vllm_omni import Omni
+from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import build_prompt
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 MODEL_NAME = "tencent/HunyuanImage-3.0-Instruct"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STAGE_CONFIG_PATH = REPO_ROOT / "vllm_omni" / "model_executor" / "stage_configs" / "hunyuan_image3_t2i.yaml"
 
-sys.path.insert(0, str(REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3"))
-from end2end import build_prompt
+# Functional smoke test: 4 inference steps is enough to verify the full
+# AR -> DiT -> VAE plumbing end-to-end without paying for image quality.
+SMOKE_INFERENCE_STEPS = 4
 
 pytestmark = [pytest.mark.advanced_model, pytest.mark.diffusion]
 
@@ -44,6 +44,7 @@ def test_t2i_generates_image(omni: Omni) -> None:
     sampling_params = OmniDiffusionSamplingParams(
         seed=1234,
         num_outputs_per_prompt=1,
+        num_inference_steps=SMOKE_INFERENCE_STEPS,
     )
 
     prompt = build_prompt(

@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-# ruff: noqa: E402
 """Smoke test for HunyuanImage-3.0 Image-to-Text (I2T) pipeline."""
 
-import sys
 from collections.abc import Generator
 from pathlib import Path
 
@@ -11,20 +9,18 @@ import pytest
 import torch
 
 from vllm_omni import Omni
+from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import build_prompt
 
 MODEL_NAME = "tencent/HunyuanImage-3.0-Instruct"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STAGE_CONFIG_PATH = REPO_ROOT / "vllm_omni" / "model_executor" / "stage_configs" / "hunyuan_image3_i2t.yaml"
 
-# Longest stable prefix shared by HF greedy reference and vllm-omni AR output on
-# this input (verified 2026-05-04 via scripts/bench/hf_i2t_pr2986_baseline.py +
-# vllm_omni_i2t_pr2986_check.py). vllm-omni vs HF is not bitwise-alignable past
-# this point — see memory/hf/hf_omni_alignment_method.md.
+# Longest stable prefix (5 words / 20 characters) shared by HF greedy reference
+# and vllm-omni AR output on this input (verified 2026-05-04 via
+# scripts/bench/hf_i2t_pr2986_baseline.py + vllm_omni_i2t_pr2986_check.py).
+# vllm-omni vs HF is not bitwise-alignable past this point — see
+# memory/hf/hf_omni_alignment_method.md.
 EXPECTED_PREFIX = "The image is a solid"
-
-# Allow importing end2end from examples
-sys.path.insert(0, str(REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3"))
-from end2end import build_prompt
 
 pytestmark = [pytest.mark.advanced_model, pytest.mark.diffusion]
 
@@ -45,7 +41,7 @@ def omni() -> Generator[Omni, None, None]:
 
 @pytest.mark.skipif(torch.cuda.device_count() < 4, reason="Need at least 4 CUDA GPUs.")
 def test_i2t_generates_text(omni: Omni) -> None:
-    """Verify I2T output starts with the HF-aligned 20-char prefix `EXPECTED_PREFIX`."""
+    """Verify I2T output starts with the HF-aligned `EXPECTED_PREFIX` (5 words / 20 chars)."""
     # Solid-color image keeps the input self-contained and reproducible.
     from PIL import Image
 
@@ -65,7 +61,12 @@ def test_i2t_generates_text(omni: Omni) -> None:
     request_output = getattr(first_output, "request_output", first_output)
     assert request_output.outputs, "No completion outputs"
 
-    generated_text = request_output.outputs[0].text
+    completion = request_output.outputs[0]
+    finish_reason = getattr(completion, "finish_reason", None)
+    assert finish_reason is not None, "AR generation did not finish (finish_reason is None)"
+    assert str(finish_reason) != "abort", f"AR generation aborted: finish_reason={finish_reason!r}"
+
+    generated_text = completion.text
     assert isinstance(generated_text, str), f"Expected str, got {type(generated_text)}"
     n = len(EXPECTED_PREFIX)
     assert len(generated_text) >= n, f"AR output shorter than {n} chars (got {len(generated_text)}): {generated_text!r}"
