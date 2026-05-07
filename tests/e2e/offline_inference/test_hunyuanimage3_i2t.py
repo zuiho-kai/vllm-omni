@@ -15,11 +15,11 @@ MODEL_NAME = "tencent/HunyuanImage-3.0-Instruct"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STAGE_CONFIG_PATH = REPO_ROOT / "vllm_omni" / "model_executor" / "stage_configs" / "hunyuan_image3_i2t.yaml"
 
-# Longest stable prefix (5 words / 20 characters) shared by HF greedy reference
-# and vllm-omni AR output on this input (verified 2026-05-04 via
-# scripts/bench/hf_i2t_pr2986_baseline.py + vllm_omni_i2t_pr2986_check.py).
-# vllm-omni vs HF is not bitwise-alignable past this point — see
-# memory/hf/hf_omni_alignment_method.md.
+# Longest stable prefix (20 tokens; decodes to "The image is a solid") shared
+# by HF greedy reference and vllm-omni AR output on this input (verified
+# 2026-05-04 via scripts/bench/hf_i2t_pr2986_baseline.py +
+# vllm_omni_i2t_pr2986_check.py). vllm-omni vs HF is not bitwise-alignable
+# past this point — see memory/hf/hf_omni_alignment_method.md.
 EXPECTED_PREFIX = "The image is a solid"
 
 pytestmark = [pytest.mark.advanced_model, pytest.mark.diffusion]
@@ -41,7 +41,7 @@ def omni() -> Generator[Omni, None, None]:
 
 @pytest.mark.skipif(torch.cuda.device_count() < 4, reason="Need at least 4 CUDA GPUs.")
 def test_i2t_generates_text(omni: Omni) -> None:
-    """Verify I2T output starts with the HF-aligned `EXPECTED_PREFIX` (5 words / 20 chars)."""
+    """Verify I2T output starts with the HF-aligned `EXPECTED_PREFIX` (first 20 tokens)."""
     # Solid-color image keeps the input self-contained and reproducible.
     from PIL import Image
 
